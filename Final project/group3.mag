@@ -1,0 +1,295 @@
+// -----------------------------------------------------------------
+// Global Constants
+// -----------------------------------------------------------------
+
+Sb0 := [0xc, 0xa, 0xd, 0x3, 0xe, 0xb, 0xf, 0x7, 0x8, 0x9, 0x1, 0x5, 0x0, 0x2, 0x4, 0x6];
+
+// ShuffleCell Permutation
+ShuffleP := [1, 11, 6, 16, 15, 5, 12, 2, 10, 4, 13, 7, 8, 14, 3, 9];
+
+// Inverse ShuffleCell Permutation
+InvShuffleP := [1, 8, 15, 10, 6, 3, 12, 13, 16, 9, 2, 7, 11, 14, 5, 4];
+
+// Round Constants
+RoundConstantsHex := [
+    0x243f, 0x6a88, 0x85a3, 0x08d3, 0x1319, 0x8a2e, 0x0370, 0x7344, 
+    0xa409, 0x3822, 0x299f, 0x31d0, 0x082e, 0xfa98, 0xec4e
+];
+
+// -----------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------
+
+UpperCase := function(s)
+    // Helper: Convert string to uppercase
+    result := "";
+    // ASCII 'a' is 97, 'A' is 65. Diff is 32.
+    for i in [1..#s] do
+        c := s[i];
+        code := StringToCode(c);
+        if code ge 97 and code le 122 then
+            result := result cat CodeToString(code - 32);
+        else
+            result := result cat c;
+        end if;
+    end for;
+    return result;
+end function;
+
+IntToHex16 := function(n)
+    // Helper: Convert Integer to 16-char Hex String (Uppercase)
+    chars := "0123456789ABCDEF";
+    val := n;
+    
+    if val eq 0 then 
+        s := "0"; 
+    else
+        s := "";
+        while val gt 0 do
+            d := (val mod 16);
+            s := chars[d+1] cat s; // Prepend char
+            val := val div 16;
+        end while;
+    end if;
+    
+    // Pad with leading zeros to length 16
+    while #s lt 16 do
+        s := "0" cat s;
+    end while;
+    
+    return s;
+end function;
+
+HexToNibbles := function(hex_str)
+    // Convert 64-bit Hex String to Sequence of 16 Nibbles
+    val := StringToInteger(hex_str, 16);
+    nibbles := [];
+    for i in [1..16] do
+        Append(~nibbles, BitwiseAnd(ShiftRight(val, 64 - 4*i), 0xF));
+    end for;
+    return nibbles;
+end function;
+
+NibblesToHex := function(nibbles)
+    // Convert Sequence of 16 Nibbles to 64-bit Hex String
+    val := 0;
+    for i in [1..16] do
+        val := ShiftLeft(val, 4);
+        val := val + nibbles[i];
+    end for;
+    return IntToHex16(val);
+end function;
+
+ApplySubCell := function(state)
+    return [Sb0[x + 1] : x in state];
+end function;
+
+ApplyShuffle := function(state)
+    return [state[ShuffleP[i]] : i in [1..16]];
+end function;
+
+ApplyInvShuffle := function(state)
+    return [state[InvShuffleP[i]] : i in [1..16]];
+end function;
+
+ApplyMixColumn := function(state)
+    new_state := [0 : i in [1..16]];
+    
+    for c in [0..3] do
+        col := [state[c*4 + 1], state[c*4 + 2], state[c*4 + 3], state[c*4 + 4]];
+        new_col := [0, 0, 0, 0];
+        
+        // Matrix multiplication over GF(2)
+        new_col[1] := BitwiseXor(BitwiseXor(col[2], col[3]), col[4]);
+        new_col[2] := BitwiseXor(BitwiseXor(col[1], col[3]), col[4]);
+        new_col[3] := BitwiseXor(BitwiseXor(col[1], col[2]), col[4]);
+        new_col[4] := BitwiseXor(BitwiseXor(col[1], col[2]), col[3]);
+        
+        new_state[c*4 + 1] := new_col[1];
+        new_state[c*4 + 2] := new_col[2];
+        new_state[c*4 + 3] := new_col[3];
+        new_state[c*4 + 4] := new_col[4];
+    end for;
+    return new_state;
+end function;
+
+GetRoundKey := function(K0, K1, i)    
+    if (i mod 2) eq 0 then
+        RK_base := K0;
+    else
+        RK_base := K1;
+    end if;
+    
+    if i lt 15 then
+        alpha := RoundConstantsHex[i+1];
+    else
+        alpha := 0; 
+    end if;
+
+    RK_out := [0 : k in [1..16]];
+    
+    for j in [1..16] do
+        r := (j - 1) mod 4; 
+        c := (j - 1) div 4; 
+        
+        // Extract bit from alpha (row-major mapping)
+        shift_amt := (3 - r) * 4 + (3 - c);
+        alpha_bit := BitwiseAnd(ShiftRight(alpha, shift_amt), 1);
+        
+        RK_out[j] := BitwiseXor(RK_base[j], alpha_bit);
+    end for;
+    
+    return RK_out;
+end function;
+
+// -----------------------------------------------------------------
+// Main Functions for Midori
+// -----------------------------------------------------------------
+
+MIDORI64_enc := function(P, K)    
+    P_nibbles := HexToNibbles(P);
+    K_int := StringToInteger(K, 16);  // COnverts hex string to int
+    
+    K1_int := BitwiseAnd(K_int, 0xFFFFFFFFFFFFFFFF);  // extract lower 64 bits 
+    K0_int := ShiftRight(K_int, 64);  // extract upper 64 bits
+    
+    K0 := HexToNibbles(IntToHex16(K0_int));
+    K1 := HexToNibbles(IntToHex16(K1_int));
+    
+    WK := [BitwiseXor(K0[k], K1[k]) : k in [1..16]];
+    
+    state := P_nibbles;
+    state := [BitwiseXor(state[k], WK[k]) : k in [1..16]];
+    
+    for i in [0..14] do
+        state := ApplySubCell(state);
+        state := ApplyShuffle(state);
+        state := ApplyMixColumn(state);
+        RKi := GetRoundKey(K0, K1, i);
+        state := [BitwiseXor(state[k], RKi[k]) : k in [1..16]];
+    end for;
+    
+    state := ApplySubCell(state);
+    state := [BitwiseXor(state[k], WK[k]) : k in [1..16]];
+    
+    return NibblesToHex(state);
+end function;
+
+MIDORI64_dec := function(C, K)
+    C_nibbles := HexToNibbles(C);
+    K_int := StringToInteger(K, 16);
+    
+    K1_int := BitwiseAnd(K_int, 0xFFFFFFFFFFFFFFFF);
+    K0_int := ShiftRight(K_int, 64);
+    
+    K0 := HexToNibbles(IntToHex16(K0_int));
+    K1 := HexToNibbles(IntToHex16(K1_int));
+    WK := [BitwiseXor(K0[k], K1[k]) : k in [1..16]];
+    
+    state := C_nibbles;
+    state := [BitwiseXor(state[k], WK[k]) : k in [1..16]];
+    
+    for i := 14 to 0 by -1 do
+        state := ApplySubCell(state);
+        state := ApplyMixColumn(state);
+        state := ApplyInvShuffle(state);
+        
+        RKi := GetRoundKey(K0, K1, i);
+        DecKey := ApplyInvShuffle(ApplyMixColumn(RKi));
+        
+        state := [BitwiseXor(state[k], DecKey[k]) : k in [1..16]];
+    end for;
+    
+    state := ApplySubCell(state);
+    state := [BitwiseXor(state[k], WK[k]) : k in [1..16]];
+    
+    return NibblesToHex(state);
+end function;
+
+// -----------------------------------------------------------------
+// Subspace Attack
+// -----------------------------------------------------------------
+
+function ETB(st) // "Eight (and nine) To Binary"
+    // converts a string of 16 {8,9}-characters into a sequence of 16 bits
+    A:=HexToNibbles(st);
+    return [GF(2)!(A[i]-8):i in [1..16]];
+end function;
+
+function BTS (b)// "Binary To String"
+    // converts a vector of bits into a string of {0,1}-characters
+    return &cat[IntegerToString(Integers()!i):i in Eltseq(b)];
+end function;
+
+
+function MIDORI64_KeyRecovery(P,C,P1,C1)
+        
+    // Part 1 (Writing the linear system) ---------------------------------------------------
+    row:=[]; 
+    row[1]:= [1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1,0,0,0,0,0,1,1,1,0,0,1,0,1,1,1,1];
+    row[2]:= [0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,1,0,1,0,0,1,0,1];
+    row[3]:= [0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,0,1,1,1,1,0,0,0,1,0,1,1];
+    row[4]:= [0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1,1,0,0,0,1,0,0];
+    row[5]:= [0,0,0,0,1,0,0,0,0,0,0,1,0,1,0,1,0,0,0,0,0,0,1,0,0,1,0,1,1,1,1,0];
+    row[6]:= [0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,1,0,1,0,0,1,1,1,0];
+    row[7]:= [0,0,0,0,0,0,1,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,1,0,0,1,0,0,1,1,0,0];
+    row[8]:= [0,0,0,0,0,0,0,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0];
+    row[9]:= [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,1,0,0];
+    row[10]:=[0,0,0,0,0,0,0,0,0,1,0,1,0,1,1,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0];
+    row[11]:=[0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0];
+    row[12]:=[0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0];
+    row[13]:=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,1,0,0,0,1,0,1];
+    row[14]:=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,1,1,1,1,1,1,1,0,0,1];
+    row[15]:=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,1,1,0,0,0,1,1,1,1];
+    row[16]:=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,0,1,0,0,1,1,0,0];
+
+    LS:=Matrix(GF(2),16,32,[]);
+    for j in [1..16] do
+        LS[j]:=Vector(GF(2),row[j]);
+    end for;
+    LST:=Transpose(LS);
+
+    p:=ETB(P);
+    c:=ETB(C);
+
+    B:=[];
+    B[1]:=p[1]+p[6]+p[7]+p[8]+p[11]+p[12]+p[13]+p[14]+c[6]+c[7]+c[8]+c[11]+c[13]+c[14]+c[15]+c[16];
+    B[2]:=p[2]+p[4]+p[9]+p[11]+p[12]+p[14]+p[16]+c[4]+c[9]+c[11]+c[14]+c[16]+GF(2)!1;
+    B[3]:=p[3]+p[4]+p[6]+p[7]+p[8]+p[9]+p[13]+p[16]+c[4]+c[6]+c[7]+c[8]+c[9]+c[13]+c[15]+c[16];
+    B[4]:=p[9]+p[10]+p[14]+p[16]+c[4]+c[9]+c[10]+c[14]+GF(2)!1;
+    B[5]:=p[5]+p[7]+p[10]+p[13]+p[15]+p[16]+c[7]+c[10]+c[12]+c[13]+c[14]+c[15]+GF(2)!1;
+    B[6]:=p[6]+p[7]+p[8]+p[10]+p[13]+p[14]+c[7]+c[8]+c[10]+c[13]+c[14]+c[15]+GF(2)!1;
+    B[7]:=p[10]+p[13]+p[15]+p[16]+c[7]+c[10]+c[13]+c[14];
+    B[8]:=p[14]+p[15]+p[16]+c[8];
+    B[9]:=p[14]+p[16]+c[9]+c[14];
+    B[10]:=p[9]+p[10]+p[12]+p[13]+p[14]+p[15]+c[9]+c[13];
+    B[11]:=p[10]+p[11]+p[12]+c[10]+GF(2)!1;
+    B[12]:=p[13]+p[15]+p[16]+c[14];
+    B[13]:=p[1]+p[4]+p[9]+p[10]+p[14]+p[16]+c[1]+c[4]+c[9]+c[10]+c[14]+c[16]+GF(2)!1;
+    B[14]:=p[2]+p[4]+p[7]+p[8]+p[9]+p[10]+p[11]+p[12]+p[13]+p[16]+c[2]+c[4]+c[7]+c[8]+c[9]+c[10]+c[11]+c[12]+c[13]+c[16];
+    B[15]:=p[3]+p[4]+p[6]+p[7]+p[8]+p[9]+p[13]+p[14]+p[15]+p[16]+c[3]+c[4]+c[6]+c[7]+c[8]+c[9]+c[13]+c[14]+c[15]+c[16]+GF(2)!1;
+    B[16]:=p[5]+p[7]+p[8]+p[10]+p[13]+p[14]+c[5]+c[7]+c[8]+c[10]+c[13]+c[14];
+    Bm:=Matrix(GF(2),1,16,B);
+
+    // Part 2 (Solving the linear system) ---------------------------------------------------
+    sol,ker:=Solution(LST,Bm);
+    sol1:=sol[1];
+
+    // Part 3 (Brute forcing all the 2^16 possible keys) ------------------------------------
+    for u in ker do
+        kcand:=BTS(sol1+u);
+        if C1 eq MIDORI64_enc(P1,kcand) then 
+            return kcand;
+        end if;	
+    end for;
+
+end function;
+
+function MIDORI64_SubspaceAttack(K)
+    P:="8989888988888888";
+    C:=MIDORI64_enc(P,K);
+    P1:="1a45f55512abc140";
+    C1:=MIDORI64_enc(P1,K);
+    return K eq MIDORI64_KeyRecovery(P,C,P1,C1);
+end function;
+
