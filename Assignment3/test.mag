@@ -1,0 +1,38 @@
+
+procedure test1()
+    s:=[GF(2) | 1,1,1,0,1,0];
+    P<x>:=PolynomialRing(GF(2));
+    a,b := Berlekamp_Massey(s);
+    assert a eq 3;
+    assert P!b eq x^3+x+1;
+    printf "Test 1 passed!\n";
+end procedure;
+
+procedure test2()
+    F:=GF(2);
+    R<[x]>:=PolynomialRing(F,3);
+    RR<X>:=PolynomialRing(F);
+    fun:=x[1]*(x[2]+1)+x[3]*x[2];//GEFFE COMBINER
+    pol1:=X^3+X+1; state1:=[F|0,1,1];//lfsr1
+    pol2:=X^4+X+1; state2:=[F|0,1,1,0];//lfsr2
+    pol3:=X^5+X^2+1; state3:=[F|0,0,0,0,1];//lfsr3
+    S1:=LFSRSequence(pol1,state1,20);
+    S2:=LFSRSequence(pol2,state2,20);
+    S3:=LFSRSequence(pol3,state3,20);
+    seq:=[ Evaluate(fun,[S1[i],S2[i],S3[i]]):i in [1..20]];
+    res := [ [ 0, 1, 1 ] ];
+    assert res eq InitialStates(seq,[pol1]);
+    printf "Test 2 Passed!\n";
+end procedure;
+
+procedure test3()
+    L := [];
+    CorrelationAttack(~L);
+    print L;
+end procedure;
+
+
+
+test1();
+test2();
+test3();

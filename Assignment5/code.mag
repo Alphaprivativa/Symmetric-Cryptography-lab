@@ -1,0 +1,55 @@
+"""contains the code for the toy block cipher, and the forward declaration of the encryption function"""
+
+
+sbox := [0xE, 0x4, 0xD, 0x1, 0x2, 0xF, 0xB, 0x8, 0x3, 0xA, 0x6, 0xC, 0x5, 0x9, 0x0, 0x7];
+pbox := [1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15, 4, 8, 12, 16];
+
+GF2SeqToInteger := function(x, n)
+    return SequenceToInteger([IntegerRing()!x[i] : i in Reverse([1 .. n])], 2);
+end function;
+
+IntegerToGF2Seq := function(x, n)
+    y := [GF(2)!y : y in Reverse(IntegerToSequence(x, 2))];
+    return [GF(2)!0 : i in [1 .. n - #y]] cat y;
+end function;
+
+Substitution := function(m)
+    return IntegerToGF2Seq(sbox[GF2SeqToInteger(m, 4) + 1], 4);
+end function;
+
+Permutation := function(m)
+    return [m[pbox[i]] : i in [1 .. 16]];
+end function;
+
+S1 := Sym({0 .. 15})!(13, 5, 11, 9, 7, 2, 1)(10, 15, 14, 6, 3)(4, 8);
+S2 := Sym({0 .. 15})!(12, 14, 0, 13, 15, 9, 4, 1, 2, 6, 11, 7, 3, 5)(10, 8);
+
+KSchedule := function(K)
+    Ks := [K];
+    for i in [1 .. 4] do
+        K := [];
+        for j in [0 .. 1] do
+            K1 := IntegerToGF2Seq(GF2SeqToInteger(Ks[i][8 * j + 1 .. 8 * j + 4], 4) ^ S1, 4);
+            K2 := IntegerToGF2Seq(GF2SeqToInteger(Ks[i][8 * j + 5 .. 8 * j + 8], 4) ^ S2, 4);
+            K := K cat K2 cat K1;
+        end for;
+        Ks := Ks cat [K];
+    end for;
+    return Ks;
+end function;
+
+ 
+Encrypt := function(M,K)
+	Ks := KSchedule(K);
+    C := [M[j] + Ks[1][j] : j in [1 .. 16]];
+    for i in [2 .. #Ks - 1] do
+        C := &cat[Substitution(C[j .. j + 3]) : j in [1 .. 16 by 4]];
+        C := Permutation(C);
+        C := [C[j] + Ks[i][j] : j in [1 .. 16]];
+    end for;
+    C := &cat[Substitution(C[j .. j + 3]) : j in [1 .. 16 by 4]];
+    C := [C[j] + Ks[#Ks][j] : j in [1 .. 16]];
+    return C;
+end function;
+ 
+ forward Enc;

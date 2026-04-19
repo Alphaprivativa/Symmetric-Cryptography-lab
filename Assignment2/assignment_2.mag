@@ -1,0 +1,181 @@
+/* #################################################
+ * ############ Tool functions #####################
+ * #################################################
+ */
+
+function VectorToExponent(vector, dimension)
+    // Converts a vector (over GF(2)) to a list of integers representing exponents
+    // E.g. [1,0,1,1] -> [1,3,4]
+    // this is usefult to convert vectors to monomials in polynomial rings trough the built in function Monomial
+    return [ Integers()!vector[i] : i in [1..dimension] ];
+end function;
+
+
+/* #################################################
+ * ######## Exercise 1: Algebraic normal form ######
+ * #################################################
+ */ 
+
+function ANF(T) // T is a truth table
+    n := Integers()!Log(2, #T);
+    V := VectorSpace(GF(2), n);
+    R<[x]> := PolynomialRing(GF(2), n);
+    A := [GF(2)!0 : i in [1..#T]]; // coefficients of ANF
+    ordered_V := [v : v in V];
+
+    // One could make the calculation of the A[i] more efficient choosing a better ordering but we are using the built in ordering for coherence with the example given
+    for i in [1..#T] do
+        A[i] := &+ [ T[j] : j in [1..#T] | ordered_V[j]*ordered_V[i] eq ordered_V[j] ];
+        // this checks that supp(ordered_V[j]) \subseteq ordered_V[i] as set
+        // equivalently one could chack if monomial(v[j]) divides monomial(v[i])
+    end for;
+
+
+    return &+ [ A[i]* Monomial(
+            R,
+            VectorToExponent(ordered_V[i], n)  // converts the vector to exponent
+        ) : i in [1..#T] ];
+end function;
+
+
+/* #################################################
+ * ########### Exercise 2: Walsh form ##############
+ * #################################################
+ */ 
+
+function WalshTransform(f,a)
+    V := Parent(a);
+    return &+[ (-1)^(Integers()!(
+        Evaluate(f, Eltseq(x)) + InnerProduct(a, x)
+    )) : x in V ];
+end function;
+
+
+/* #################################################
+ * ########## Exercise 3: Walsh spectrum ###########
+ * #################################################
+ */ 
+
+function WalshSpectrum(f)
+    n := Rank(Parent(f));
+    V := VectorSpace(GF(2), n);
+    return [ WalshTransform(f, v) : v in V];
+end function;
+
+
+/* #################################################
+ * ############ Exercise 4: Is Bent? ###############
+ * #################################################
+ */
+
+function IsBent(f)
+    n := Rank(Parent(f));
+    if n mod 2 ne 0 then
+        return false; // bent functions only exist for even n
+    end if;
+    V := VectorSpace(GF(2), n);
+    
+    // Compute the max of the absolute valuo of the Walsh transofrm
+    maxWalsh := Max({ Abs(w): w in WalshSpectrum(f) });
+
+    return maxWalsh eq Integers()!(2^(n/2));
+end function;
+
+
+/* #################################################
+ * ###### Exercise 5: Correlation immunity #########
+ * #################################################
+ */
+
+
+function CorrelationImmunity(f)
+    if IsBent(f) then
+        return 0; // bent functions have correlation immunity 0
+    end if;
+    n := Rank(Parent(f));
+    V := VectorSpace(GF(2), n);
+    Wf := func<a | WalshTransform(f, a)>;
+
+    min_nonzero_weight := n + 1;
+    for v in V do
+        w_v := Weight(v);
+        if Wf(v) ne 0 and w_v ge 1 and w_v lt min_nonzero_weight then
+                min_nonzero_weight := w_v;
+        end if;
+    end for;
+
+    return min_nonzero_weight - 1; 
+end function;
+
+
+
+
+/* #################################################
+ * ################# TESTS #########################
+ * #################################################
+ */ 
+
+
+procedure TestExercise1()
+    T:=[ 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1 ];
+    R<[x]> := PolynomialRing(GF(2), Integers()!Log(2, #T));
+    assert R!ANF(T) eq (x[1]*x[2]*x[4] + x[1]*x[2] + x[1]*x[3]*x[4] + x[1]*x[3] + x[1]*x[4] + x[2]*x[3] + x[4]);
+    print "Exercise 1 tests passed!";
+end procedure;
+
+
+procedure TestExercise2()
+    P<[x]>:=PolynomialRing(GF(2),4);
+    f:=x[1]*x[2] + x[2]*x[3] + x[2]*x[4] + x[3];
+    assert WalshTransform(f,Vector(GF(2),[0,1,1,0])) eq 8;
+
+    print "Exercise 2 tests passed!";
+end procedure;
+
+
+procedure TestExercise3()
+    P<[x]>:=PolynomialRing(GF(2),4);
+    f:=x[1]*x[2]*x[3]+x[4]+ x[2]*x[4]+ x[3];
+    W:=WalshSpectrum(f);
+    assert SequenceToMultiset(W) eq {* -4^^4, 0^^6, 4^^4, 8^^2 *};
+    print "Exercise 3 tests passed!";
+end procedure;
+
+
+procedure TestExercise4()
+    P<[x]>:=PolynomialRing(GF(2),2);
+    f1:=x[1]*x[2];
+    assert IsBent(f1);
+
+
+    P<[x]>:=PolynomialRing(GF(2),4);
+    f2:=x[1]*x[2] + x[2]*x[3] + x[2]*x[4] + x[3];
+    assert not IsBent(f2);  // it has 8 in the spectrum
+
+    print "Exercise 4 tests passed!";
+end procedure;
+
+
+procedure TestExercise5()
+    P<[x]>:=PolynomialRing(GF(2),2);
+    f1:=x[1]*x[2];
+    assert CorrelationImmunity(f1) eq 0;
+
+    P<[x]>:=PolynomialRing(GF(2),4);
+    f2:=x[1]*x[2] + x[2]*x[3] + x[2]*x[4] + x[3];
+    assert CorrelationImmunity(f2) eq 0;
+
+    f3 := func<v | &+Eltseq(v)>;  // Parity function
+    V := VectorSpace(GF(2), 4);
+    pol_f3 := ANF([ f3(v) : v in V ]);
+    assert CorrelationImmunity(pol_f3) eq 3;  // n-1 for parity function
+
+    print "Exercise 5 tests passed!";
+end procedure;
+
+
+TestExercise1();
+TestExercise2();
+TestExercise3();
+TestExercise4();
+TestExercise5();

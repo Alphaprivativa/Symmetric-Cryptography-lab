@@ -1,0 +1,15 @@
+//Test for Vigenère cipher
+	C3:="Bw I owdw pop i kxtrzb qhl wjv'l mvlg i khll";
+
+procedure test3()
+	M3:="If I told you a secret you won't tell a soul";
+	K:="travis";
+	if VigCrypt(M3,K) ne C3 then 
+		error "The Vigenere Encryption is not correct!\n";
+	elif VigDecrypt(C3,K) ne M3 then 
+		error "The Vigenere Decryption is not correct!\n";
+		else 
+		"The functions are correct! The plaintext you obtained is the following:\n-----------------\n\n";
+		VigDecrypt(C3,K);
+	end if;
+end procedure;

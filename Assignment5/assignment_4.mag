@@ -1,0 +1,496 @@
+load "code.mag";
+forward Enc;
+
+// ----------------------
+// General tool functions
+// ----------------------
+
+function RecoverK(K5: InvS1:=S1^(-1), InvS2 := S2^(-1))
+    // Recover K from Ks[5] reversing Kschedule
+
+    current_K := K5;
+    
+    for step in [1 .. 4] do
+        prev_K := [];
+        
+        for j in [0 .. 1] do
+            K2 := current_K[8 * j + 1 .. 8 * j + 4];
+            K1 := current_K[8 * j + 5 .. 8 * j + 8];
+            // Convert to integers
+            val2_permuted := GF2SeqToInteger(K2, 4);
+            val1_permuted := GF2SeqToInteger(K1, 4);
+            // Invert the Permutations
+            // Forward: val ^ S  -> Inverse: val ^ InvS
+            val2_original := val2_permuted ^ InvS2;
+            val1_original := val1_permuted ^ InvS1;
+            // Restore original order: K1 cat K2
+            // Forward source was: Ks[i][8*j+1..4] (K1 source) then Ks[i][8*j+5..8] (K2 source)
+            prev_K := prev_K cat IntegerToGF2Seq(val1_original, 4) cat IntegerToGF2Seq(val2_original, 4);
+        end for;
+
+        current_K := prev_K;
+    end for;
+    return current_K;
+end function;
+
+function InversePermutation(m)
+    // Inverse of the function Permutation
+    return [m[Position(pbox, i)] : i in [1 .. 16]];
+end function;
+
+function InverseSubstitution(m)
+    // Inverse of the function Substitution
+    return IntegerToGF2Seq(Position(sbox, GF2SeqToInteger(m, 4))-1, 4);
+end function;
+
+function ValidateKey(K_guess: number_of_validations:=5)
+    // Checks if the guessed key is correct
+    for i in [1..number_of_validations] do
+        P := [Random(GF(2)) : i in [1..16]]; 
+        C := Enc(P); C_guess := Encrypt(P, K_guess);
+        if C ne C_guess then return false; end if;
+    end for;
+    return true;
+end function;
+
+// ---------------------------
+// Exercise 1  (Linear attack)
+// ---------------------------
+function SboxLinearBiasTable(S)
+    // returns bias table 
+    V := VectorSpace(GF(2), 4);
+    T := [[] : _ in [1..16]];
+
+    input_sums := [1..16]; output_sums := [1..16];
+    for input_sum in input_sums do
+        T[input_sum] := [0 : _ in [1..16]];
+        for output_sum in output_sums do
+            elts_input_sum := IntegerToGF2Seq(input_sum-1, 4);
+            elts_output_sum := IntegerToGF2Seq(output_sum-1, 4);
+            T[input_sum][output_sum] := (&+[Integers()!(
+                &+[v[i]*elts_input_sum[i]+Substitution(Eltseq(v))[i]*elts_output_sum[i] : i in [1..4]]+1
+                ) : v in V
+            ]-8);
+        end for;
+    end for;
+
+    return T;
+end function;
+
+function GetLinearPairs(number_of_pairs)
+    // retunrs a list of pairs [[P_1,C_1], ..., [P_n, C_n]] with plaintexts and cyphertexts
+    pairs := [];
+    for i in [1..number_of_pairs] do
+        P := [Random(GF(2)) : i in [1..16]]; C := Enc(P);
+        pairs := Append(pairs, [P,C]);
+    end for;
+
+    return pairs;
+end function;
+
+function GetFormula(U, P)
+    // This function returns the equation sum_{i\in I} U[i] + sum_{j \in J} P[j] = 0
+    // via polynomial formula with variable X[1]...X[32] where the first 16 should be the U entries and the other 16 the P entries
+    R<[X]> := PolynomialRing(GF(2), 32);
+    formula := &+[ X[i]*U[i] : i in [1..16]] + &+[X[16+i]*P[i] : i in [1..16]];
+
+    return formula;
+end function;
+
+function LinearRecoverKeyBoxes(boxes, formula, guessed_k5, pairs)
+    // Boxes is a a sequence of the form [x_1, x_2, x_3, x_4] where x_i in GF(2)
+    // formula is a Polynomial in 32 variables (U_4[1], ..., U_4[16], P[1], ..., P[16])
+    // formula is the formula obtained following the path
+    // guessed_k5 is the starting key you have already guessed, it will be updated only on the entries with ones in the boxes
+    // pairs is a list of the form [[P_1, c_1] ... [P_N, C_N]] containing pairs of input output
+
+    number_of_pairs := #pairs;
+    max_bias := 0; best_key := [0 : i in [1..16]];
+    // Our path exits only in the boxes signed with 1
+    V := VectorSpace(GF(2), 4*&+[Integers()!box : box in boxes]);
+    for v in V do
+        // I build K5 equal to guessed_k5 over the boxes signed with 0, we find the one generating the biggest bias for the remaining entries
+        K5 := []; t := 1;
+        for j in [1..#boxes] do
+            if boxes[j] eq 0 then
+                K5 cat:= guessed_k5[4*(j-1)+1 .. 4*j];
+            else
+                K5 cat:= Eltseq(v)[4*(t-1)+1 .. 4*t];
+                t +:= 1;
+            end if;
+        end for;
+
+        count := 0;
+        for PC in pairs do
+            P := PC[1]; C:=PC[2];
+            // U4 = S^{-1}(C+K5)
+            U4 := &cat[ InverseSubstitution([C[w]+K5[w] : w in [j..j+3]]) : j in [1 .. 16 by 4] ];
+            // here we count when formula(U_4, P) = 1, for our purposes, this is the same as counting formula(U_4, P) = 0 because we are considering the bias not the probability
+            count +:= Integers()!Evaluate(formula, U4 cat P);
+        end for;
+        bias := Abs(count-(number_of_pairs div 2));
+        if bias gt max_bias then max_bias := bias; best_key := K5; end if;
+    end for;
+
+    return best_key;
+end function;
+
+function FindLinearPath(activated_boxes, bias_table: number_of_layers:=4)
+    // activated_boxes is a a sequence of the form [x_1, x_2, x_3, x_4] where x_i in GF(2)
+    // bias_table is the output of SboxLinearBiasTable
+    //
+    // This function builds a paths that activates the wanted boxes and have a good enough bias (wanted to be as big as possible)
+    
+    bias_table := [ [Abs(x)/16 : x in bias] : bias in bias_table ];  // Normalize biases
+    table := Transpose(Matrix(bias_table));  // this way rows are the outputs
+    VS := VectorSpace(GF(2), 4*&+activated_boxes);
+    cur_maximal_bias := 0; // this will be our theoric bias prevision for the best path
+    cur_U4 := []; cur_P := [];
+
+    for v in VS do
+        // If v is zero on one of the boxes we skip it because it doesn't activate all the wanted boxes
+        if 0 in [&+(Eltseq(v)[j .. j+3]) : j in [1 .. Degree(VS) by 4]] then continue; end if;
+
+        // Initialize the output U_4
+        U4 := []; t := 1;
+        for j in [1..#activated_boxes] do
+            if activated_boxes[j] eq 0 then
+                U4 cat:= [0,0,0,0];
+            else
+                U4 cat:= Eltseq(v)[4*(t-1)+1 .. 4*t];
+                t +:= 1;
+            end if;
+        end for;
+
+        cur_total_bias := [];  // this will give our theoric bias prevision
+        U := U4;
+        for i in [1..number_of_layers-1] do
+            V := InversePermutation(U);
+            V_ind := [GF2SeqToInteger([V[j] : j in [i..i+3]], 4)+1 : i in [1..16 by 4]];
+            biases := [Eltseq(table[index]) : index in V_ind];
+            max_biases := [Max(bias) : bias in biases]; 
+            entries := [Position(biases[i], max_biases[i]) : i in [1..#max_biases]];
+
+            cur_total_bias cat:= [max_biases[i] : i in [1..#max_biases] | V_ind[i] ne 0];  // Here we memorize biases for each active Sbox
+            U := &cat[IntegerToGF2Seq(entry-1, 4) : entry in entries];
+        end for;
+
+        cur_total_bias := 2^(#cur_total_bias-1) * &*cur_total_bias;
+
+        if cur_total_bias gt cur_maximal_bias then
+            cur_maximal_bias := cur_total_bias;
+            cur_U4 := U4; cur_P := U;
+        end if;
+    end for;
+
+    return cur_U4, cur_P, cur_maximal_bias;
+end function;
+
+
+function LinearAttack()
+    number_of_pairs := 5000; pairs := GetLinearPairs(number_of_pairs);
+
+    bias_table := SboxLinearBiasTable(sbox);
+
+    // Via sperimental calculations with FindLinearPath one finds out that the best boxes to activate to achieve maximal bias are the following (at least between the one searched by FindLinearPath)
+    
+    // This finds a path with bias: 0.0593 almost double of the one in the pdf
+    U, P, bias_1_1 := FindLinearPath([1,0,0,1], bias_table);
+    formula_1_1 := GetFormula(U, P);
+    guess_1_1 := LinearRecoverKeyBoxes([1,0,0,1], formula_1_1, [0: i in [1..16]], pairs);
+
+    // This finds a path with bias: 0.0791
+    U, P, bias_1_2 := FindLinearPath([0,1,1,1], bias_table);
+    formula_1_2 := GetFormula(U, P);
+    // Even if formula_1_2 activates boxes 2,3,4 we have alrady recovered the box 4, so we activate only 2 and 3
+    guess_1_2 := LinearRecoverKeyBoxes([0,1,1,0], formula_1_2, guess_1_1, pairs);
+
+    // Validation
+    key_guess := RecoverK(guess_1_2);
+    if ValidateKey(key_guess) then return key_guess; end if;  // if the validation is successfull the key is returned
+
+    // This finds a path with bias: 0.0791
+    U, P, bias_2_1 := FindLinearPath([1,1,1,0], bias_table);
+    formula_2_1 := GetFormula(U, P);
+
+    guess_2_1 := LinearRecoverKeyBoxes([0,1,1,0], formula_2_1, guess_1_2, pairs);
+
+    // Validation
+    key_guess := RecoverK(guess_2_1);
+    if ValidateKey(key_guess) then return key_guess; end if;
+
+    // if our guesses didn't work we brute force one between the first and last box, this has a scarse computational cost
+    // Now we guessed the middle part depending only on one of the first and last box
+    // supposing at least one of those two boxes is correct then the other one is wrong
+    // We bruteforce the guess for this single box, there are only 16 possibilities
+    // we do it for both our guesses and both the possible wrong boxes so we do 64 validations
+    // this seams acceptable
+    for guess in [guess_1_2, guess_2_1] do
+        V := VectorSpace(GF(2), 4);
+        for v in V do
+            guess_1 := Eltseq(v) cat guess[5..16];
+            key_guess := RecoverK(guess_1);
+            if ValidateKey(key_guess) then return key_guess; end if;
+
+            guess_2 := guess[1..12] cat Eltseq(v);
+            key_guess := RecoverK(guess_2);
+            if ValidateKey(key_guess) then return key_guess; end if;
+        end for;
+    end for;
+
+    print "This guess is wrong: didn't pass validation for differential attack";
+    return key_guess;
+end function;
+
+
+// ---------------------------------
+// Exercise 2  (Differential Attack)
+// ---------------------------------
+function SboxDifferentialProbabilityTable(S)
+    V := VectorSpace(GF(2), 4);
+    T := [[] : _ in [1..16]];
+
+    deltaXs := [1..16]; deltaYs := [1..16];
+    for deltaX in deltaXs do
+        T[deltaX] := [0 : _ in [1..16]];
+        for deltaY in deltaYs do
+            vec_deltaX := V!IntegerToGF2Seq(deltaX-1, 4);
+            vec_deltaY := V!IntegerToGF2Seq(deltaY-1, 4);
+            prob := 0;
+            for v in V do
+                real_delta := V!Substitution(Eltseq(v+vec_deltaX))-V!Substitution(Eltseq(v));
+                prob +:= (real_delta eq vec_deltaY) select 1 else 0;
+            end for;
+        T[deltaX][deltaY] := prob;
+        end for;
+    end for;
+    return T;
+end function;
+
+function GetDifferentialPairs(plain_texts, deltaP)
+    // plain_texts is a list of plain texts of length number_of_pairs
+    // deltaP is of the form [x_1, ..., x_16] for x_i in GF(2)
+    //
+    // the returned Pairs will have the form
+    // [
+    //  [[P_1, C_11], ..., [P_N, C_1N]],
+    //  [[P_1+deltaP, C_21], ..., [P_N+deltaP, C_2N]]
+    // ] 
+    // Where P_i are plaintexts and C_1i the corresponding cyphertexts
+    // C_2i are the cyphertexts corresponding to P_i+deltaP
+    number_of_pairs := #plain_texts; pairs := [[], []];
+
+    for i in [1..number_of_pairs] do
+        P := plain_texts[i]; C := Enc(P);
+        pairs[1] := Append(pairs[1], [P,C]);
+
+        PP := [P[j]+deltaP[j] : j in [1..16]]; CC := Enc(PP);
+        pairs[2] := Append(pairs[2], [PP, CC]);
+    end for;
+
+    return pairs;
+end function;
+
+function DifferentialRecoverKeyBoxes(boxes, theoric_deltaU, guessed_K5, pairs)
+    // Boxes is a a sequence of the form [x_1, x_2, x_3, x_4] where x_i in GF(2)
+    // pairs is generated from a given deltaP related to theoric_deltaU trough a differential path that we intend to exploit
+    // guessed_k5 is the starting key you have already guessed, it will be updated only on the entries with ones in the boxes
+    // pairs is a list of the form [[P_1, c_1] ... [P_N, C_N]] containing pairs of input output
+
+    number_of_pairs := #(pairs[1]);
+    max_prob := -1; best_key := [0 : i in [1..16]];
+
+    V := VectorSpace(GF(2), 4*&+[Integers()!box : box in boxes]);
+    for v in V do
+        // I build K5 equal to guessed_k5 over the boxes signed with 0, we find the one generating the biggest bias for the remaining entries
+        K5 := []; t := 1;
+        for j in [1..#boxes] do
+            if boxes[j] eq 0 then
+                K5 cat:= guessed_K5[4*(j-1)+1 .. 4*j];
+            else
+                K5 cat:= Eltseq(v)[4*(t-1)+1 .. 4*t];
+                t +:= 1;
+            end if;
+        end for;
+
+        count := 0;
+        for i in [1..number_of_pairs] do
+            C_1 := pairs[1][i][2]; C_2 := pairs[2][i][2];
+            // U4 = S^{-1}(C+K5)
+            U4_1 := &cat[ InverseSubstitution([C_1[w]+K5[w] : w in [j..j+3]]) : j in [1 .. 16 by 4] ];
+            U4_2 := &cat[ InverseSubstitution([C_2[w]+K5[w] : w in [j..j+3]]) : j in [1 .. 16 by 4] ];
+            deltaU4 := [U4_2[i]-U4_1[i]: i in [1..16]];
+            count +:= (&and[
+                        (boxes[j+1] eq 1) select 
+                            (deltaU4[4*j+1 .. 4*(j+1)] eq theoric_deltaU[4*j+1 .. 4*(j+1)]) 
+                        else 
+                            (deltaU4[4*j+1 .. 4*(j+1)] eq [0,0,0,0])
+                        : j in [0..3]
+                    ]) select 1 else 0;
+        end for;
+        if count gt max_prob then max_prob := count; best_key := K5; end if;
+    end for;
+
+    return best_key;
+end function;
+
+function PreprocessReverseDDT(DDT)
+    // This is a tool function that we use in GetBestReverseDifferentialPath
+    // RevAdj[output_val + 1] = list of <input_val, prob>
+    RevAdj := [ [] : i in [1..16]]; 
+    
+    for in_idx in [1..16] do
+        for out_idx in [1..16] do
+            if DDT[in_idx][out_idx] gt 0 then
+                // For a given output (out_idx), we store which input (in_idx) causes it
+                // The probability is still the forward probability P(out|in)
+                Append(~RevAdj[out_idx], <in_idx-1, DDT[in_idx][out_idx]/16.0>);
+            end if;
+        end for;
+    end for;
+
+    // Sort by probability descending to find best paths first
+    for i in [1..16] do
+        Sort(~RevAdj[i], func<x,y | y[2] - x[2]>);
+    end for;
+    
+    return RevAdj;
+end function;
+
+
+procedure ReverseDFSSearch(current_diff, current_prob, depth, max_depth, trail, ~best_res, RevDDT_Adj)
+    // This is the DFS routine of the function GetBestReverseDifferentialPath
+
+    // Base case: reached desired depth (back to plaintext)
+    if depth eq max_depth then
+        if current_prob gt best_res["prob"] then
+            best_res["prob"] := current_prob;
+            best_res["trail"] := trail;
+            best_res["start_deltaP"] := current_diff;
+        end if;
+        return;
+    end if;
+
+    // Pruning
+    if current_prob le best_res["prob"] then return; end if;
+
+    // 1. Inverse Permutation Layer
+    // We are at the end of Round i (Delta U_{i+1}). We need Delta V_i
+    s_box_output_diff := InversePermutation(current_diff);
+
+    // 2. Inverse S-Box Layer
+    // Split 16-bit diff into 4 nibbles
+    nibbles := [GF2SeqToInteger(s_box_output_diff[4*j+1 .. 4*j+4], 4) : j in [0..3]];
+    
+    // Get possible INPUT diffs for each output nibble from Reverse DDT
+    options := [];
+    for n in nibbles do
+        if n eq 0 then
+            Append(~options, [<0, 1.0>]); // 0<-0 with prob 1
+        else
+            Append(~options, RevDDT_Adj[n+1]);
+        end if;
+    end for;
+
+    // 3. Cartesian Product of valid S-box inputs
+    for opt1 in options[1] do
+        for opt2 in options[2] do
+            for opt3 in options[3] do
+                for opt4 in options[4] do
+                    
+                    // Calculate probability
+                    new_prob := current_prob * opt1[2] * opt2[2] * opt3[2] * opt4[2];
+                    
+                    if new_prob le best_res["prob"] then continue; end if;
+
+                    // Construct S-layer INPUT difference (which is Delta U_i)
+                    s_in_int := [opt1[1], opt2[1], opt3[1], opt4[1]];
+                    prev_round_input_diff := &cat[IntegerToGF2Seq(x, 4) : x in s_in_int];
+                    
+                    // Add to trail (PREPENDING since we are going backwards, or just append and reverse later)
+                    // Storing: <RoundInput, SBoxOutput, RoundOutput(InputToNext)>
+                    // In reverse: We went from RoundOutput -> SBoxOutput -> RoundInput
+                    new_trail := trail;
+                    Append(~new_trail, <prev_round_input_diff, s_box_output_diff, current_diff, new_prob>);
+                    
+                    ReverseDFSSearch(prev_round_input_diff, new_prob, depth + 1, max_depth, new_trail, ~best_res, RevDDT_Adj);
+
+                end for;
+            end for;
+        end for;
+    end for;
+end procedure;
+
+function GetBestReverseDifferentialPath(target_deltaU, rounds)
+    // This function finds (via a DFS) the best path getting the desired target_deltaU
+    // the ouput (best_res) is an hashtable where
+    // best_res["prob"] is the estimated probability
+    // best_res["trial"] is the path itself with steps containing input_diff, Sbox_out and Round_out
+    // best_res["start_deltaP"] is the deltaP that gives the target_deltaU going trough the path
+
+    T := SboxDifferentialProbabilityTable(sbox);
+    RevDDT_Adj := PreprocessReverseDDT(T);
+    
+    // Result structure
+    best_res := AssociativeArray();
+    best_res["prob"] := -1.0;
+    best_res["trail"] := [];
+    best_res["start_deltaP"] := [];
+
+    // Start Reverse DFS
+    ReverseDFSSearch(target_deltaU, 1.0, 0, rounds, [], ~best_res, RevDDT_Adj);
+    
+    // Post-process: Reverse the trail list so it reads Round 1 -> Round N
+    if #best_res["trail"] gt 0 then
+        best_res["trail"] := Reverse(best_res["trail"]);
+    end if;
+
+    return best_res;
+end function;
+
+function DifferentialAttack()
+    number_of_pairs := 1000;
+    plain_texts := [[Random(GF(2)) : i in [1..16]] : j in [1..number_of_pairs]];
+    
+    // I use these theoric_deltaU  because after some calculations with `GetBestReverseDifferentialPath` I found these to be good choices because lead to path with relatively high probability
+
+    theoric_deltaU := [GF(2)|0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0];  // [0,1,1,0]
+    path := GetBestReverseDifferentialPath(theoric_deltaU, 3);
+    deltaP := path["start_deltaP"];
+    pairs := GetDifferentialPairs(plain_texts, deltaP);
+    // Probability of the path 0.0197, you can check it via path["prob"]
+    guess_1 := DifferentialRecoverKeyBoxes([0,1,1,0], theoric_deltaU, [0:i in [1..16]], pairs);
+
+
+    theoric_deltaU := [GF(2)|1,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0];  // [1,0,0,1] activated
+    path := GetBestReverseDifferentialPath(theoric_deltaU, 3);
+    deltaP := path["start_deltaP"];
+    // Probability of the path 0.0117, you can check it via path["prob"]
+    pairs := GetDifferentialPairs(plain_texts, deltaP);
+    guess_2 := DifferentialRecoverKeyBoxes([1,0,0,1], theoric_deltaU, guess_1, pairs);
+
+    K := RecoverK(guess_2);
+    if ValidateKey(K) then return K; end if;
+
+    theoric_deltaU := [GF(2)|0,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0];  // [0,1,0,1] activated
+    path := GetBestReverseDifferentialPath(theoric_deltaU, 3);
+    deltaP := path["start_deltaP"];
+    // Probability of the path 0.0263, you can check it via path["prob"]
+    pairs := GetDifferentialPairs(plain_texts, deltaP);
+    guess_3 := DifferentialRecoverKeyBoxes([0,0,0,1], theoric_deltaU, guess_2, pairs);
+
+    K := RecoverK(guess_3);
+    if ValidateKey(K) then return K; end if;
+
+    // If Our guess didn't work we brute force the first box (which has a small computational cost)
+    // The first box is the one found with the differential path with smallest porbability
+    V := VectorSpace(GF(2), 4);
+    for v in V do
+        guess := Eltseq(v) cat guess_3[5..16];
+        key_guess := RecoverK(guess);
+        if ValidateKey(key_guess) then return key_guess; end if;
+    end for;
+
+    print "This guess is wrong: didn't pass validation for linear attack";
+    return K;
+end function;

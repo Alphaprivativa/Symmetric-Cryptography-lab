@@ -1,0 +1,14 @@
+load "code.mag";
+load "assignment.mag";
+
+ K:=[Random(GF(2)) : i in [1..16]];
+ function Enc(M)
+ return Encrypt(M,K);
+ end function;
+ 
+K1:=LinearAttack();
+K2:=DifferentialAttack();
+
+
+"linear attack", K eq K1;
+"differential attack",K eq K2;

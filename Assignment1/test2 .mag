@@ -1,0 +1,61 @@
+//Test for the substitution cipher
+	
+C2:="Hlctn, ncywto wg mt
+Wft fsmho qglnr, cw'y h mtyy
+Ncbt sortl wft yth
+Cy jtwwtl wfho hoiwfcox wfti xgw sk wftlt
+Wft ythqttr cy hnqhiy xlttotl
+Co ygmtjgri tnyt'y nhpt
+Igs rlthm hjgsw xgcox sk wftlt
+Jsw wfhw cy h jcx mcywhpt
+Asyw nggp hw wft qglnr hlgsor igs
+Lcxfw ftlt go wft gvtho bnggl
+Ysvf qgortlbsn wfcoxy ysllgsor igs
+Qfhw mglt cy igs nggpco' bgl?
+Sortl wft yth
+Sortl wft yth
+Rhlncox cw'y jtwwtl
+Rgqo qftlt cw'y qtwwtl
+Whpt cw blgm mt
+Sk go wft yfglt wfti qglp hnn rhi
+Gsw co wft yso wfti ynhet hqhi
+Qfcnt qt rtegwco'
+Bsnn wcmt wg bnghwco'
+Sortl wft yth";
+
+
+procedure test2() 
+	sigma:=Sym(26)!(1, 8, 6, 2, 10)(3, 22, 5, 20, 23, 17, 21, 19, 25, 9)(4, 18, 12, 14, 15, 7, 24, 26)(11, 16);
+	M2:="Ariel, listen to me
+The human world, it's a mess
+Life under the sea
+Is better than anything they got up there
+The seaweed is always greener
+In somebody else's lake
+You dream about going up there
+But that is a big mistake
+Just look at the world around you
+Right here on the ocean floor
+Such wonderful things surround you
+What more is you lookin' for?
+Under the sea
+Under the sea
+Darling it's better
+Down where it's wetter
+Take it from me
+Up on the shore they work all day
+Out in the sun they slave away
+While we devotin'
+Full time to floatin'
+Under the sea";
+if SubCrypt(M2,sigma) ne C2 then 
+		error "The Substitution Encryption is not correct!\n";
+	elif SubDecrypt(C2,sigma) ne M2 then 
+		error "The Substitution Decryption is not correct!\n";
+	else 
+		"The functions are correct! The plaintext you obtained is the following:\n-----------------\n\n";
+		SubDecrypt(C2,sigma);
+	end if;
+end procedure;
+
+

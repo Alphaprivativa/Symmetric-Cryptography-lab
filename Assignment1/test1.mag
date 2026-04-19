@@ -1,0 +1,16 @@
+//Test for Shift Cipher
+
+ C1:="Kyv hlztb sifne wfo aldgj fmvi kyv crqp ufx.";
+
+procedure test1()  
+	M1:="The quick brown fox jumps over the lazy dog.";
+	if ShiftCrypt(M1,17) ne C1 then 
+		error "The Shift Encryption is not correct!\n";
+	elif ShiftDecrypt(C1,17) ne M1 then 
+		error "The Shift Decryption is not correct!\n";
+	else 
+		"The functions are correct! The plaintext you obtained is the following:\n-----------------\n\n";
+		ShiftDecrypt(C1,17);
+	end if;
+end procedure;
+

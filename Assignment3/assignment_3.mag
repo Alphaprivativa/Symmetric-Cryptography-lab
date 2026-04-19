@@ -1,0 +1,222 @@
+// ################################################
+// ########### Berlekamp-Massey ###################
+// ################################################
+
+
+function Berlekamp_Massey(s)
+    n := #s;
+    R<x> := PolynomialRing(GF(2));
+    P := R!1; PP := R!1; lambda := 0; m := -1;
+    // In the general case F_q one should store also d' = 1;
+    // then d' is used in the calculation of P in the for loop and is updated to the value of d at each iteration
+    for t in [0..n-1] do
+        // Compute discrepancy d = s[t] + sum_{i=1}^{lambda} p_i * s[t-i]
+        // Use Coefficient(P,i) instead of Coefficients(P) to safely access coefficients
+        // Filter | t-i ge 0 to avoid invalid sequence indices (s[k]=0 for k<0 by convention)
+        if lambda ge 1 then 
+            d := s[t+1] + &+ [Coefficient(P, i)*s[t-i+1] : i in [1..lambda] | t-i ge 0];
+        else 
+            d := s[t+1]; 
+        end if;
+
+        if d ne 0 then
+            T := P;
+            P := P - PP*x^(t-m);
+            if 2*lambda le t then
+                lambda := t+1-lambda;
+                m := t;
+                PP := T;
+            end if;
+        end if;
+    end for;
+
+    return lambda, P;
+end function;
+
+// #######################################
+// ########## Initial State ##############
+// #######################################
+
+
+function InitialStates(s, Pol)
+    N := #s; n := #Pol; F := GF(2);
+    spaces_prod := CartesianProduct([ VectorSpace(F, Degree(P)) : P in Pol ]);
+
+    // Maximizing correlation is equivalent to minimize hamming distance
+    best_dist := Infinity(); best_states := 0;
+    for initial_states in spaces_prod do
+        sigma := [0 : j in [1..N]];
+        for i in [1..n] do
+            y := LFSRSequence(Pol[i], Eltseq(initial_states[i]), N);
+            sigma := [sigma[j]+y[j] : j in [1..N]];
+        end for;
+
+        dist := &+[ Integers()!(sigma[j]-s[j]): j in [1..N] ];
+        if dist le best_dist then 
+            best_dist := dist; best_states := initial_states;
+        end if;
+    end for;
+
+    return [Eltseq(state) : state in best_states];
+end function;
+
+
+// #######################################
+// ######### Correlation Attack ##########
+// #######################################
+
+function BooleanCorrelation(f, g)
+    // f is a boolean function in ANF form
+    // g is a boolean function in ANF form
+    // returns number representing a probability of the form
+    //  P(f(x_1,\ldots, x_n)=g(x_1,\ldots, x_n))
+    // for example for g(x_1,\ldots, x_n)= x_i we have P(f(x_1,\ldots, x_n)=x_i) that is the correlation to the component i
+
+    F := GF(2);
+    n := Rank(Parent(f));
+
+    variables_space := VectorSpace(F, n);
+    prob := 0;
+    for v in variables_space do
+        if Evaluate(f-g, Eltseq(v)) eq 0 then prob +:= 1; end if;
+    end for;
+    return prob/2^n;
+end function;
+
+
+function BruteForceRemaining(s, Pol, f, initial_states, to_brute_force_indices)
+    // s is a squence
+    // Pol is a list of polynomials
+    // f is a boolean function in Anf form with #Pol variables
+    // initial_states is a list of initial states with non null initial state for the alrady guessed ones
+    // to_brute_force_indices is a list of indices for which we must perform a brute force attack
+    // 
+    // This function returns the initial states for the LFSR associated with the polynomials necessary in order to have s as stream cypher generated via the combine generator f
+    
+    if #to_brute_force_indices eq 0 then return initial_states; end if;  // there's nothing to brute force
+
+    N := #s; n := #Pol; F := GF(2);
+    fix_indices := [j : j in [1..n] | j notin to_brute_force_indices];
+
+    spaces_prod := CartesianProduct([VectorSpace(F, Degree(Pol[j])) : j in to_brute_force_indices]);
+    Y_fix := [ LFSRSequence(Pol[j], initial_states[j], N) : j in fix_indices];
+   
+    for to_brute_force_initial_states in spaces_prod do
+        Y := [ [ ] : j in [1..n] ];
+        for j in [1..#fix_indices] do Y[fix_indices[j]] := Y_fix[j]; end for;
+        for j in [1..#to_brute_force_indices] do 
+            Y[to_brute_force_indices[j]] := LFSRSequence(
+                Pol[to_brute_force_indices[j]],
+                Eltseq(to_brute_force_initial_states[j]),
+                N
+            );
+        end for;
+
+        y := [ [Y[j][i]: j in [1..n]] : i in [1..N]];
+        if s eq [ Evaluate(f, y[i]) : i in [1..N] ] then
+            res := [ [] : j in [1..n] ];
+            for j in fix_indices do res[j] := initial_states[j]; end for;
+            for j in [1..#to_brute_force_indices] do res[to_brute_force_indices[j]] := Eltseq(to_brute_force_initial_states[j]); end for;
+            return res;
+        end if;
+    end for;
+
+    error "No compatible initial state found";
+end function;
+
+
+function GetCorrelatedInitialStates(s, Pol, f: tol:=3/4)
+    // Uses correlation between f and the sums of components or a single component to find a good guess for the initial state associated to some stream ciphers
+
+    inverted_s := [ss+1 : ss in s];  // This will be useful for negative correlations
+    n := #Pol; R<[x]> := Parent(f);
+    initial_states := [[] : i in [1..n]];
+    fixed := {};
+    for i in [1..n] do 
+        for j in [1..i] do
+            if {i,j} subset fixed then continue; end if;  // this reduces computations
+            // We guess for the high correlated sums of two components for the LFSR initial state to be the one with maximal correlation with the sequence
+            sum_corr := BooleanCorrelation(f, x[i]+x[j]);
+            if sum_corr ge tol then
+                states := InitialStates(s, [Pol[i], Pol[j]]);
+                initial_states[i] := states[1]; initial_states[j] := states[2];
+                fixed := fixed join {i,j};
+            end if;
+
+            if sum_corr le 1-tol then
+                // If the correlation is < 1/2 it means this is positively correlated with the inverse sequence s+1, so we can use the function InitialState with the inverse sequence as target
+                states := InitialStates(inverted_s, [Pol[i], Pol[j]]);
+                initial_states[i] := states[1]; initial_states[j] := states[2];
+                fixed := fixed join {i,j};
+            end if;
+        end for;
+
+        if i in fixed then continue; end if;  // this reduces computations
+        // We guess for the high correlated components for the LFSR initial state to be the one with maximal correlation with the sequence        
+        component_corr := BooleanCorrelation(f, x[i]);
+        if component_corr ge tol then
+            initial_states[i] := InitialStates(s, [Pol[i]])[1];
+            fixed := fixed join {i};
+        end if;
+        if component_corr le 1-tol then
+            initial_states[i] := InitialStates(inverted_s, [Pol[i]])[1];
+            fixed := fixed join {i};
+        end if;
+    end for;
+
+    return fixed, initial_states;
+end function;
+
+
+procedure CorrelationAttack(~L)
+    Seq:=eval Read("dataSeq.mag");
+    F := GF(2);
+
+    // Correlation attack over s1
+    s1:=Seq[1]; N:=#s1;
+
+    RR<X> := PolynomialRing(F);
+    pol1:=X^6+X^5+X^2+X+1;//lfsr1
+    pol2:=X^7+X^5+X^4+X^3+X^2+X+1;//lfsr2
+    pol3:=X^5+X^3+X^2+X+1;//lfsr3
+    pol4:=X^4+X+1;//lfsr4
+    polinomials := [pol1, pol2, pol3, pol4]; n:= #polinomials;
+
+    R<[x]> := PolynomialRing(F, n);
+    f := x[1]*x[2] + x[2]*x[3] + x[2]*x[4] + x[3];
+
+    // Getting all initial states that maximize correlation with the sequence s1 trough xor sum of some components or considering only one component
+    // fixed is a list of the guessed initial states
+    fixed, initial_states := GetCorrelatedInitialStates(s1, polinomials, f);
+    fixed := [j : j in fixed]; to_brute_force := [j : j in [1..n] | j notin fixed];
+
+    // Brute forcing non correlated components
+    // I implemented this for completeness but one can see that for these cases there is no need for brute force because the sequence to_brute_force is empty, so it will not brute force anything. 
+    // However this way in a general case attack if the code doesn't find enough correlations it does a brute force on the remaining pieces
+    L := Append(
+        L, 
+        BruteForceRemaining(s1, polinomials, f, initial_states, to_brute_force)
+    );
+
+    // Correlation attack over s1
+    s2:=Seq[2]; N := #s2;
+    RR<X> := PolynomialRing(F);
+    pol1:=X^6+X^5+X^2+X+1;//lfsr1
+    pol2:=X^7+X^5+X^4+X^3+X^2+X+1;//lfsr2
+    pol3:=X^5+X^3+X^2+X+1;//lfsr3
+    polinomials := [pol1, pol2, pol3]; n:= #polinomials;
+
+    R<[x]> := PolynomialRing(F, n);
+    f := x[1]*x[2] + x[1]*x[3] + x[2]*x[3] + x[1] + x[2] + 1;
+
+    fixed, initial_states := GetCorrelatedInitialStates(s2, polinomials, f);
+    fixed := [j : j in fixed]; to_brute_force := [j : j in [1..n] | j notin fixed];
+
+    // Brute forcing non correlated components
+    // I implemented this for completeness but one can see that for these cases there is no brute force because the sequence to_brute_force is empty, so it is not necessary. 
+    // However this way in a general case attack if the code doesn't find enough correlations it does a brute force on the remaining pieces
+    L := Append(
+        L, 
+        BruteForceRemaining(s2, polinomials, f, initial_states, to_brute_force)
+    );
+end procedure;

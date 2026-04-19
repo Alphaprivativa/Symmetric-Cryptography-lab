@@ -1,0 +1,39 @@
+
+procedure TestGetCCZeqMap()
+    Fn<w>:=FiniteField(2,5);
+    P<X>:=PolynomialRing(Fn);
+    f:=X^3;
+    g1:=X^2+w^7*X;
+    g2:=X^84 + X^82 + X^81 + X^76 + X^74 + X^73 + X^72 + X^70 + X^69 + X^52
+    + X^50 + X^49 + X^44 + X^42 + X^41 + X^40 + X^38 + X^37 + X^36
+    + X^34 + X^33 + X^28 + X^26 + X^25 + X^24 + X^22 + X^21;
+
+    assert CCZeq(g1, f) eq false;
+    assert CCZeq(g2, f) eq true;
+
+    res := GetCCZeqMap(g2, f);  // Res is the equivalence map
+
+    // Check if res maps the graph of g2 to the graph of f
+    Fn := GF(2^5); n:=Degree(Fn);
+    all_ok := true; graph_f := [[x, Evaluate(f, x)] : x in Fn];
+
+    for x in Fn do
+        image := res([x, Evaluate(g2, x)]);
+        // The image should be (y | f(y)) for some y
+        if image in graph_f then
+            graph_f := Remove(graph_f, Position(graph_f, image));
+            else
+            all_ok := false;
+        end if;
+    end for;
+    if all_ok then
+        print "res sends the graph of g2 to the graph of f.";
+    else
+        error "res does NOT send the graph of g2 to the graph of f for all x.";
+    end if;
+
+    print "res is clearly affine by the definition: (x,y) -> (s_10+s_11*x+s_12*y, s_20+s_21*x+s_22*y).";
+end procedure;
+
+
+TestGetCCZeqMap();

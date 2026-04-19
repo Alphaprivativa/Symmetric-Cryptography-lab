@@ -1,0 +1,232 @@
+// #######################
+// ## General Utilities ##
+// #######################
+
+AL := Eltseq("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+LOWER_LENGTH := #AL div 2;
+
+function LetterToValue(letter: alphabet:=AL)
+    val := Index(alphabet, letter);
+    if val eq 0 then
+        return -1;  // not found
+    end if;
+    return val-1; // 0-based index to be consistent with mod 26
+end function;
+
+function ValueToLetter(val: alphabet:=AL)
+    if val lt 0 or val ge #alphabet then
+        return -1;  // out of range
+    end if;
+    return alphabet[val+1]; // 1-based index
+end function;
+
+
+function IsLowercase(val: lower_length:=LOWER_LENGTH)
+    return val le lower_length-1;
+end function;
+
+
+// #############################
+// ####### SHift cipher ########
+// #############################
+
+
+function ShiftCrypt(x,k: lower_length:=LOWER_LENGTH) // k is the shift
+    x_seq := Eltseq(x);
+
+    for i in [1..#x_seq] do
+        letter := x_seq[i];
+        val := LetterToValue(letter);
+        if val eq -1 then continue; end if; // not found, skip
+        
+        if IsLowercase(val) then
+            val := (val + k) mod lower_length;
+        else
+            val := ((val + k) mod lower_length) + lower_length;
+        end if;
+
+        x_seq[i] := ValueToLetter(val);
+    end for;
+
+    return &cat x_seq;
+end function;
+
+
+function ShiftDecrypt(y, k)
+    return ShiftCrypt(y, -k);
+end function;
+
+
+// ##############################
+// #### Substitution cipher #####
+// ##############################
+
+function SubCrypt(x, f: lower_length:=LOWER_LENGTH)  // f is a permutation of {1, ..., lower_length}
+    x_seq := Eltseq(x);
+    for i in [1..#x_seq] do
+        letter := x_seq[i];
+        val := LetterToValue(letter);
+        if val eq -1 then continue; end if; // not found, skip
+
+        if IsLowercase(val) then
+            val := (val+1)^f-1; // f is 1-based
+        else
+            val := (val-lower_length+1)^f-1 + lower_length; // f is 1-based
+        end if;
+
+        x_seq[i] := ValueToLetter(val);
+    end for;
+
+    return &cat x_seq;
+end function;
+
+function SubDecrypt(y, f)
+    return SubCrypt(y, f^(-1));
+end function;
+
+
+// ##############################
+// ######  Vigenere cipher ######
+// ##############################
+
+
+function VigCrypt(x,K: lower_length:=LOWER_LENGTH)
+    x_seq := Eltseq(x);
+    m := #K;
+    K_val := [LetterToValue(k) mod lower_length : k in Eltseq(K)];
+
+    j := 0;
+    for i in [1..#x_seq] do
+        val := LetterToValue(x_seq[i]);
+        if val eq -1 then continue; end if; // not found, skip
+
+        // Shift crypt logic (I don't call it for memory efficiency)
+        k := K_val[j+1];
+        if IsLowercase(val) then
+            val := (val + k) mod lower_length;
+        else
+            val := ((val + k) mod lower_length) + lower_length;
+        end if;
+
+        x_seq[i]:=ValueToLetter(val);
+        j := (j+1) mod m;
+    end for;
+
+    return &cat x_seq;
+end function;
+
+
+function VigDecrypt(y, K: lower_length:=LOWER_LENGTH)
+    inv_K := &cat [ValueToLetter(-LetterToValue(k) mod lower_length) : k in Eltseq(K)];  // This sets the entry of K to lower but for our use it is not a problem
+    return VigCrypt(y, inv_K);
+end function;
+
+
+// #####################
+// ##### Frequence #####
+// #####################
+
+function Frequencies(L: lower_length:=LOWER_LENGTH, tol:=5)
+    R:=RealField(tol);
+    occurrences := [0 : j in [1..lower_length]];
+    total_recurrences := 0;
+    
+    for i in [1..#L] do
+        val := LetterToValue(L[i]);
+        if val eq -1 then continue; end if; // not found, skip
+        val := val mod lower_length; // set val to lowercase
+
+        occurrences[val+1] +:= 1;
+        total_recurrences +:= 1;
+    end for;
+    freq := [R!(occ/total_recurrences) : occ in occurrences];
+
+    if #L eq 1 then
+        return freq, 0;
+    end if;
+
+    pairs_of_equals := [(occ*(occ-1)) : occ in occurrences];
+    index := R!((&+(pairs_of_equals))/(total_recurrences*(total_recurrences-1)));
+    
+    return freq, index;
+end function;
+
+// ########################
+// ##### Kasiski Test #####
+// ########################
+
+function GetDistances(y_seq, substring_length)
+    /*
+     * Gets all the minimal distnces between two occurrences of the same `substring_length` 
+     * consecutive letters
+     */
+    visited := AssociativeArray();
+    distances := AssociativeArray();
+
+    for i in [1..#y_seq-substring_length] do
+        elt := <j : j in y_seq[i..(i+substring_length)]>;
+        if not IsDefined(distances, elt) then
+            distances[elt]:=0;
+        end if;
+        if IsDefined(visited, elt) then
+            distances[elt] := GCD(distances[elt], i-visited[elt]);
+        end if;
+        visited[elt] := i;
+    end for;
+
+    distances_values := {distances[key] : key in Keys(distances)} diff {0};
+
+    return distances_values;
+end function;
+
+
+function KasiskiIndex(L, guess: tol:=5)
+    if guess eq 0 then
+        return Infinity();
+    end if;
+    R := RealField(tol);
+
+    // create a list of lists where each list is crypted via a shiftcrypt
+    x := [[] : i in [1..guess]];
+    for i in [0..#L-1] do
+        x[i mod guess + 1] := Append(x[i mod guess + 1], L[i+1]);
+    end for;
+
+    // return the mean of all the indexes for each row
+    mean_index := 0;
+    for j in [1..#x] do
+        freq, ind := Frequencies(x[j]);
+        mean_index +:= ind;
+    end for;
+
+    mean_index := R!(mean_index/#x);
+    return mean_index;
+
+end function;
+
+
+function Kasiski(y, index: lower_length:=LOWER_LENGTH, tol:=10^(-2))
+    y_seq := Eltseq(y);
+
+    // we filter for the elements in y that are elements of the alphabet
+    letters := [];
+    for i in [1..#y_seq] do
+        val := LetterToValue(y[i]);
+        if val eq -1 then continue; end if;
+        
+        letters := Append(letters, ValueToLetter(val mod lower_length));
+    end for;
+
+    // Our guesses are the minimal distances between two occurrences of the same 3 consecutive letters
+    guesses := GetDistances(letters, 3);
+
+    // We get the GCD of all the plausible guesses
+    res := 0;
+    for guess in guesses do  
+        if Abs(index-KasiskiIndex(letters, guess)) le tol then  res := GCD(guess, res); end if;
+    end for;
+
+    return res;
+end function;
+
+// ########################
